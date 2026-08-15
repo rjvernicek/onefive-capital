@@ -70,8 +70,14 @@ npx wrangler secret put ANTHROPIC_API_KEY
 npx wrangler secret put TWILIO_ACCOUNT_SID
 npx wrangler secret put TWILIO_AUTH_TOKEN
 npx wrangler secret put HEALTHSPAN_MCP_URL
-npx wrangler secret put HEALTHSPAN_MCP_TOKEN   # omit if the server needs no auth
+npx wrangler secret put HEALTHSPAN_MCP_TOKEN   # only if the server uses a separate bearer
 ```
+
+Treat the Healthspan URL itself as a credential. Some deployments carry the auth
+token as a path segment (`…/mcp/<long-hex-string>`); where they do, the URL alone
+grants full read/write access to the record, and `HEALTHSPAN_MCP_TOKEN` stays
+unset. It goes in Cloudflare's secret store via the command above and nowhere
+else — never in `wrangler.toml`, which is committed.
 
 ### 4. Deploy
 

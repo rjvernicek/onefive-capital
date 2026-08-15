@@ -1,0 +1,23 @@
+{
+  "name": "healthspan-sms",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Text-message interface to the Healthspan personal health record",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "tail": "wrangler tail",
+    "pretest": "tsc src/twilio.ts --outDir .test-build --module esnext --target es2022 --moduleResolution bundler --lib es2022,dom --skipLibCheck",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.117.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260815.1",
+    "typescript": "^5.7.0",
+    "wrangler": "^4.123.0"
+  }
+}

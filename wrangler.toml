@@ -1,0 +1,33 @@
+name = "healthspan-sms"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Conversation state + webhook de-duplication.
+# Create with:  wrangler kv namespace create HEALTHSPAN_SMS
+# then paste the returned id below.
+[[kv_namespaces]]
+binding = "STATE"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+[vars]
+# Comma-separated E.164 numbers permitted to text the record.
+# Anyone not on this list is ignored. Set this before deploying.
+ALLOWED_NUMBERS = ""
+
+# The Twilio number the gateway replies from, in E.164 (e.g. +15551234567).
+TWILIO_FROM_NUMBER = ""
+
+# IANA timezone used to interpret "today", "last night", etc.
+TIMEZONE = "America/New_York"
+
+# Optional: exact public https URL Twilio posts to. Only needed if a proxy
+# rewrites the URL and signature verification starts failing.
+# PUBLIC_URL = "https://healthspan-sms.<subdomain>.workers.dev/sms"
+
+# Secrets — set with `wrangler secret put <NAME>`, never in this file:
+#   ANTHROPIC_API_KEY
+#   TWILIO_ACCOUNT_SID
+#   TWILIO_AUTH_TOKEN
+#   HEALTHSPAN_MCP_URL
+#   HEALTHSPAN_MCP_TOKEN   (omit if the MCP server needs no auth)

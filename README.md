@@ -1,5 +1,9 @@
 # healthspan-sms
 
+> This repo holds two projects: `healthspan-sms` (this directory) and
+> [`contacts/`](contacts/) — the OneFive contact database with Outlook sync
+> and its own SMS interface.
+
 Text your health record. Send a message to a Twilio number and Claude reads
 from — and writes to — the Healthspan MCP server, then texts you back.
 

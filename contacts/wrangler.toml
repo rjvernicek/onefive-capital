@@ -1,0 +1,52 @@
+name = "onefive-contacts"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+compatibility_flags = ["nodejs_compat"]
+
+# The canonical contact database.
+# Create with:  npm run db:create
+# then paste the returned database_id below and run:  npm run db:migrate
+[[d1_databases]]
+binding = "DB"
+database_name = "onefive-contacts"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+# Conversation state, webhook de-duplication, and Microsoft Graph tokens.
+# Create with:  wrangler kv namespace create ONEFIVE_CONTACTS
+[[kv_namespaces]]
+binding = "STATE"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+# Outlook delta sync cadence. Each run pulls only what changed since the last.
+[triggers]
+crons = ["*/30 * * * *"]
+
+[vars]
+# Comma-separated E.164 numbers permitted to text the database.
+# Anyone not on this list is ignored. Set this before deploying.
+ALLOWED_NUMBERS = ""
+
+# The Twilio number the gateway replies from, in E.164 (e.g. +15551234567).
+TWILIO_FROM_NUMBER = ""
+
+# IANA timezone used to interpret "today", "last week", etc.
+TIMEZONE = "America/New_York"
+
+# Default region for normalizing phone numbers without a country code.
+DEFAULT_REGION = "US"
+
+# Azure AD tenant for the Graph app registration. "common" works for both
+# work and personal Microsoft accounts; use your tenant id to lock it down.
+MS_TENANT = "common"
+
+# Optional: exact public https URL Twilio posts to. Only needed if a proxy
+# rewrites the URL and signature verification starts failing.
+# PUBLIC_URL = "https://onefive-contacts.<subdomain>.workers.dev/sms"
+
+# Secrets — set with `wrangler secret put <NAME>`, never in this file:
+#   ANTHROPIC_API_KEY
+#   TWILIO_ACCOUNT_SID
+#   TWILIO_AUTH_TOKEN
+#   MS_CLIENT_ID        (Azure app registration, application id)
+#   MS_CLIENT_SECRET    (Azure app registration, client secret)
+#   ADMIN_KEY           (long random string guarding /auth and /sync endpoints)

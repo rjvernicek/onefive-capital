@@ -3,14 +3,14 @@ import type { Env } from "./env.js";
 import { buildSystem } from "./prompt.js";
 import type { Turn } from "./conversation.js";
 import { toolDefinitions, runTool } from "./tools.js";
-
-const MODEL = "claude-opus-5";
+import { activeModel } from "./model.js";
+import type { TokenUsage } from "./pricing.js";
 
 /**
- * Caps thinking and reply text together, and thinking is on by default on this
- * model. Sized well above what an SMS-length answer needs so a question that
- * pulls several tool results can't spend the whole budget reasoning and leave
- * no text behind. Reply length is bounded by the prompt, not by this.
+ * Caps thinking and reply text together, and thinking is on by default on the
+ * models this runs. Sized well above what an SMS-length answer needs so a
+ * question that pulls several tool results can't spend the whole budget
+ * reasoning and leave no text behind. Reply length is bounded by the prompt.
  */
 const MAX_TOKENS = 12000;
 
@@ -25,6 +25,9 @@ export interface Reply {
   text: string;
   /** True when safety classifiers declined rather than the model answering. */
   refused: boolean;
+  /** Model that served the turn, and what it consumed across all tool rounds. */
+  model: string;
+  usage: TokenUsage;
 }
 
 /**
@@ -39,22 +42,36 @@ export async function ask(
   message: string,
 ): Promise<Reply> {
   const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
+  const model = await activeModel(env);
 
   const messages: Anthropic.MessageParam[] = [
     ...history.map((turn) => ({ role: turn.role, content: turn.content })),
     { role: "user" as const, content: message },
   ];
 
+  // Accumulated across every round, so one row of usage covers the whole turn.
+  const usage: TokenUsage = {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+  };
+
   let response!: Anthropic.Message;
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
     response = await client.messages.create({
-      model: MODEL,
+      model,
       max_tokens: MAX_TOKENS,
       system: buildSystem(env.TIMEZONE),
       output_config: { effort: "medium" },
       tools: toolDefinitions,
       messages,
     });
+
+    usage.input += response.usage.input_tokens ?? 0;
+    usage.output += response.usage.output_tokens ?? 0;
+    usage.cacheRead += response.usage.cache_read_input_tokens ?? 0;
+    usage.cacheWrite += response.usage.cache_creation_input_tokens ?? 0;
 
     if (response.stop_reason !== "tool_use") break;
 
@@ -91,6 +108,8 @@ export async function ask(
     return {
       text: "I can't answer that one. If it's contact info you're after, try asking a different way.",
       refused: true,
+      model,
+      usage,
     };
   }
 
@@ -106,8 +125,10 @@ export async function ask(
     return {
       text: "I looked but couldn't put together an answer. Try asking a narrower question.",
       refused: false,
+      model,
+      usage,
     };
   }
 
-  return { text, refused: false };
+  return { text, refused: false, model, usage };
 }

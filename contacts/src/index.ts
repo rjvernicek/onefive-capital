@@ -15,6 +15,9 @@ import {
 import { ask } from "./claude.js";
 import { buildAuthorizeUrl, handleAuthCallback } from "./graph.js";
 import { runSync } from "./sync.js";
+import { runReview } from "./review.js";
+import { handleModelCommand } from "./model.js";
+import { recordUsage } from "./usage.js";
 
 /** Twilio only needs an acknowledgement; the answer goes out via the REST API. */
 const EMPTY_TWIML =
@@ -28,6 +31,12 @@ const twiml = () =>
 
 /** Messages that reset the thread instead of reaching the model. */
 const RESET_WORDS = new Set(["reset", "new", "start over", "clear"]);
+
+/**
+ * The cron that runs the pricing review; anything else on the schedule is the
+ * Outlook sync. Must match wrangler.toml's [triggers] exactly.
+ */
+const REVIEW_CRON = "0 14 1 * *";
 
 export default {
   async fetch(
@@ -151,6 +160,39 @@ export default {
       return twiml();
     }
 
+    // Model switching is handled here rather than as a tool: it has to work
+    // even when the configured model is unavailable, which is exactly when
+    // the conversational path can't run.
+    const modelCommand = body.match(/^model\b\s*(.*)$/i);
+    if (modelCommand) {
+      ctx.waitUntil(
+        handleModelCommand(env, modelCommand[1])
+          .then((reply) => sendSms(env, from, reply))
+          .catch((error) => {
+            console.error("Model command failed:", error);
+            return sendSms(env, from, "Couldn't change the model — check the logs.");
+          }),
+      );
+      return twiml();
+    }
+
+    // On-demand pricing review, same report the monthly cron sends.
+    if (/^(pricing|costs?|spend)$/i.test(body)) {
+      ctx.waitUntil(
+        runReview(env)
+          .then((result) =>
+            result.sent
+              ? undefined // runReview already texted the report
+              : sendSms(env, from, result.message ?? `Nothing to report: ${result.reason}.`),
+          )
+          .catch((error) => {
+            console.error("Review failed:", error);
+            return sendSms(env, from, "Couldn't build the pricing review — check the logs.");
+          }),
+      );
+      return twiml();
+    }
+
     // A Claude turn that searches the database outlasts Twilio's 15-second
     // webhook timeout, so acknowledge now and deliver the answer as its own
     // message.
@@ -158,12 +200,25 @@ export default {
     return twiml();
   },
 
-  /** Cron: incremental Outlook sync (see wrangler.toml [triggers]). */
+  /**
+   * Cron. Two schedules share this handler (see wrangler.toml [triggers]):
+   * the frequent Outlook sync, and the monthly pricing review.
+   */
   async scheduled(
-    _controller: ScheduledController,
+    controller: ScheduledController,
     env: Env,
     ctx: ExecutionContext,
   ): Promise<void> {
+    if (controller.cron === REVIEW_CRON) {
+      ctx.waitUntil(
+        runReview(env).then(
+          (r) => console.info("Pricing review:", JSON.stringify(r)),
+          (e) => console.error("Pricing review failed:", e),
+        ),
+      );
+      return;
+    }
+
     ctx.waitUntil(
       runSync(env).then(
         (s) => console.info("Sync:", JSON.stringify(s)),
@@ -179,6 +234,14 @@ async function handle(env: Env, from: string, body: string): Promise<void> {
     const reply = await ask(env, history, body);
 
     await sendSms(env, from, reply.text);
+
+    // Usage feeds the monthly pricing review. Best-effort: a failed insert
+    // must never cost the user a reply they already received.
+    try {
+      await recordUsage(env, reply.model, reply.usage);
+    } catch (error) {
+      console.error("Failed to record usage:", error);
+    }
 
     // A refusal is not conversational context worth carrying forward.
     if (!reply.refused) {

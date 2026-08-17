@@ -164,6 +164,10 @@ Text the number. `npm run tail` streams live logs if something looks wrong.
   Capital" (created in Outlook on the next sync)
 - **Hygiene** — "cleanups?", then "approve 4" / "reject 7"
 - **Status** — "when did the last sync run?"
+- **Cost** — "pricing" runs the spend review on demand; "what am I spending?"
+  answers conversationally
+- **`model`** — shows the current model; `model haiku` switches; `model reset`
+  returns to the default
 - **`reset`** — starts a fresh thread
 
 ## Access control
@@ -178,6 +182,55 @@ Same posture as `healthspan-sms`, because the failure modes are identical:
 - SMS is not an authenticated channel in any strong sense — SIM swaps happen.
   The blast radius here is your rolodex, not your health record, but keep
   `ALLOWED_NUMBERS` tight.
+
+## Model and cost
+
+The default is **Claude Sonnet 5** — near-Opus quality on the tool-calling work
+this does, at roughly 60% of the cost. Change it by text, not by redeploy:
+
+```
+you  → "model haiku"
+back ← "Switched to Haiku 4.5 ($1/$5 per Mtok). Takes effect on your next message."
+```
+
+The override lives in KV and wins over `DEFAULT_MODEL` in `wrangler.toml`;
+`model reset` clears it. Only models in the `src/pricing.ts` catalog are
+accepted, so a typo can't wedge the gateway on an id that 404s. This is a
+reserved command handled *before* the model is called — which is the point: if
+the configured model is ever unavailable, it's the only way back.
+
+**Every turn's token usage is recorded** to `model_usage`, and on the 1st of
+each month a review costs that real traffic against the alternatives and texts
+you the comparison:
+
+```
+back ← "Last 30d: 150 msgs, $5.43 on Sonnet 5. Same traffic: Haiku 4.5 ~$1.81,
+        Opus 5 ~$9.06 (est). Switching to Haiku 4.5 saves ~$3.62/mo. Reply
+        'model <name>' to switch, or ignore to stay on Sonnet 5."
+```
+
+The review costs nothing to run — the message is assembled from arithmetic, not
+generated — and stays quiet in a month with no usage and no news, so the one
+that does matter doesn't arrive pre-muted. Text `pricing` to run it on demand.
+
+It also watches for two things you wouldn't otherwise notice:
+
+- **Promotional pricing about to lapse.** Sonnet 5's introductory rate ends
+  2026-08-31, after which output goes $10 → $15 per Mtok — a ~50% rise with no
+  change in usage. The review warns 45 days out.
+- **New models.** `GET /v1/models` is polled each review; anything new that has
+  a price in the catalog gets mentioned.
+
+**Pricing is maintained by hand** in `src/pricing.ts`, because the API exposes
+capabilities but not prices. The table is stamped with the date it was last
+verified, and the review flags itself as stale after 120 days rather than
+quietly producing confident, wrong recommendations. Re-check it against
+Anthropic's pricing page when that warning appears and bump `PRICING_VERIFIED`.
+
+One caveat the review states in its own message: alternative costs are
+**estimates**. Models tokenize differently, and a cheaper model may need more
+tool rounds to reach the same answer. Treat the ranking as sound and the
+absolute figures as approximate.
 
 ## Design decisions
 
@@ -224,7 +277,7 @@ Deliberately not built yet, in rough order of likely value:
 | --- | --- |
 | `npm run dev` | Local Worker with hot reload |
 | `npm run deploy` | Deploy to Cloudflare |
-| `npm test` | Normalization rule suite |
+| `npm test` | Normalization + pricing rule suites |
 | `npm run typecheck` | Type check without emitting |
 | `npm run tail` | Stream production logs |
 | `npm run db:migrate` | Apply schema.sql to the remote D1 |
@@ -236,6 +289,10 @@ Deliberately not built yet, in rough order of likely value:
 | --- | --- |
 | `src/index.ts` | Routes: SMS webhook, OAuth connect, manual sync, cron |
 | `src/sync.ts` | Sync engine: delta pull, hygiene detection, approved-change push |
+| `src/pricing.ts` | Model catalog, prices, cost math (pure, tested) |
+| `src/model.ts` | Active-model resolution and the `model` command |
+| `src/usage.ts` | Per-turn token accounting and window summaries |
+| `src/review.ts` | Monthly pricing review and new-model detection |
 | `src/graph.ts` | Microsoft Graph: OAuth, token rotation, delta reads, writes |
 | `src/db.ts` | D1 data layer: search, cards, writes, proposals |
 | `src/clean.ts` | Normalization rules (pure, tested) |
@@ -245,4 +302,4 @@ Deliberately not built yet, in rough order of likely value:
 | `src/twilio.ts` | Signature verification and outbound SMS |
 | `src/conversation.ts` | KV-backed thread state and de-duplication |
 | `src/env.ts` | Configuration shape and startup validation |
-| `schema.sql` | D1 schema: contacts, companies, notes, proposals, FTS |
+| `schema.sql` | D1 schema: contacts, companies, notes, proposals, usage, FTS |

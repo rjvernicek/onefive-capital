@@ -18,6 +18,9 @@ import {
 } from "./db.js";
 import { normalizePhone } from "./clean.js";
 import { queuePush } from "./sync.js";
+import { summarizeUsage, projectCost } from "./usage.js";
+import { activeModel } from "./model.js";
+import { CANDIDATES, findModel } from "./pricing.js";
 
 /**
  * Client-side tools over the D1 database. Unlike healthspan-sms (which points
@@ -165,6 +168,18 @@ export const toolDefinitions: Anthropic.Tool[] = [
     description:
       "When the last Outlook sync ran and what it did. Use when asked whether the database is up to date.",
     input_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "usage_summary",
+    description:
+      "Token usage and cost over the last N days, per model, plus what the same traffic would cost on the alternatives. Use for questions about spend, cost, or which model to run.",
+    input_schema: {
+      type: "object",
+      properties: {
+        days: { type: "number", description: "Window in days, default 30" },
+      },
+      required: [],
+    },
   },
 ];
 
@@ -314,9 +329,46 @@ export async function runTool(
       return raw ?? JSON.stringify({ error: "no sync has run yet" });
     }
 
+    case "usage_summary": {
+      const days = clampDays(input.days);
+      const at = new Date();
+      const summary = await summarizeUsage(env, days, at);
+      const current = await activeModel(env);
+      const alternatives = CANDIDATES.filter((id) => id !== current).map((id) => {
+        const price = findModel(id)!;
+        return {
+          model: id,
+          label: price.label,
+          projected_cost_usd: Number(
+            projectCost(summary.totals, price, at).toFixed(4),
+          ),
+        };
+      });
+      return JSON.stringify({
+        current_model: current,
+        window_days: days,
+        messages: summary.messages,
+        actual_cost_usd: Number(summary.actualCostUsd.toFixed(4)),
+        by_model: summary.byModel.map((m) => ({
+          model: m.model,
+          messages: m.messages,
+          cost_usd: Number(m.costUsd.toFixed(4)),
+        })),
+        alternatives,
+        caveat:
+          "Alternative costs are estimates: models tokenize differently and a smaller model may need more tool rounds.",
+      });
+    }
+
     default:
       throw new Error(`unknown tool: ${name}`);
   }
+}
+
+function clampDays(value: unknown, fallback = 30): number {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 1) return fallback;
+  return Math.min(Math.floor(n), 365);
 }
 
 function clampLimit(value: unknown, fallback = 8): number {

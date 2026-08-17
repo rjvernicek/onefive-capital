@@ -17,11 +17,18 @@ database_id = "REPLACE_WITH_D1_DATABASE_ID"
 binding = "STATE"
 id = "REPLACE_WITH_KV_NAMESPACE_ID"
 
-# Outlook delta sync cadence. Each run pulls only what changed since the last.
+# Two schedules, dispatched by cron expression in src/index.ts:
+#   */30 * * * *  — Outlook delta sync; pulls only what changed since the last run
+#   0 14 1 * *    — monthly pricing review, 1st of the month at 10am ET
 [triggers]
-crons = ["*/30 * * * *"]
+crons = ["*/30 * * * *", "0 14 1 * *"]
 
 [vars]
+# Model used for SMS answers. Overridable by texting "model <name>" without a
+# redeploy; the override lives in KV and wins over this value. See src/pricing.ts
+# for the catalog of accepted ids.
+DEFAULT_MODEL = "claude-sonnet-5"
+
 # Comma-separated E.164 numbers permitted to text the database.
 # Anyone not on this list is ignored. Set this before deploying.
 ALLOWED_NUMBERS = ""

@@ -7,6 +7,7 @@ export interface Env {
   TWILIO_FROM_NUMBER: string;
   TIMEZONE: string;
   DEFAULT_REGION: string;
+  DEFAULT_MODEL: string;
   MS_TENANT: string;
   PUBLIC_URL?: string;
 

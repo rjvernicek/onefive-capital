@@ -110,11 +110,27 @@ CREATE TABLE IF NOT EXISTS proposals (
 
 CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status);
 
--- Sync bookkeeping: Graph delta link, last run time, last run summary.
+-- Sync bookkeeping: Graph delta link, last run time, last run summary,
+-- known model ids, last pricing review.
 CREATE TABLE IF NOT EXISTS sync_state (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+-- One row per SMS turn, summed across that turn's tool rounds. The monthly
+-- pricing review reads these back to cost real traffic against other models
+-- instead of guessing at it.
+CREATE TABLE IF NOT EXISTS model_usage (
+  id                 INTEGER PRIMARY KEY,
+  occurred_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  model              TEXT NOT NULL,
+  input_tokens       INTEGER NOT NULL DEFAULT 0,
+  output_tokens      INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens  INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_usage_occurred ON model_usage(occurred_at);
 
 -- Full-text search over a flattened blob per contact (name, company, title,
 -- emails, phones, tags, recent notes). Maintained by db.reindexContact —

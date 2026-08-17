@@ -12,7 +12,7 @@
     "db:create": "wrangler d1 create onefive-contacts",
     "db:migrate": "wrangler d1 execute onefive-contacts --remote --file=./schema.sql",
     "db:migrate:local": "wrangler d1 execute onefive-contacts --local --file=./schema.sql",
-    "pretest": "tsc src/clean.ts src/twilio.ts --outDir .test-build --module esnext --target es2022 --moduleResolution bundler --lib es2022,dom --skipLibCheck",
+    "pretest": "tsc src/clean.ts src/twilio.ts src/pricing.ts --outDir .test-build --module esnext --target es2022 --moduleResolution bundler --lib es2022,dom --skipLibCheck",
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {

@@ -21,6 +21,7 @@ import {
   getContactCard,
 } from "./db.js";
 import { normalizePhone, normalizeNameCase, normalizeEmail } from "./clean.js";
+import { duplicateScanDecision, type ScanDecision } from "./schedule.js";
 
 export interface SyncSummary {
   connected: boolean;
@@ -28,6 +29,8 @@ export interface SyncSummary {
   removed: number;
   proposalsOpened: number;
   proposalsApplied: number;
+  /** Whether this run ran the duplicate scan, and why. */
+  duplicateScan: ScanDecision;
   errors: string[];
 }
 
@@ -45,6 +48,7 @@ export async function runSync(env: Env): Promise<SyncSummary> {
     removed: 0,
     proposalsOpened: 0,
     proposalsApplied: 0,
+    duplicateScan: "skipped",
     errors: [],
   };
   if (!summary.connected) return summary;
@@ -75,7 +79,26 @@ export async function runSync(env: Env): Promise<SyncSummary> {
     summary.removed++;
   }
 
-  summary.proposalsOpened += await detectDuplicates(env);
+  // A contact created or edited over SMS always enqueues a push proposal, so
+  // an applied proposal means the contact set moved even when Outlook itself
+  // reported nothing — that is what keeps an SMS-created duplicate from
+  // waiting for the daily backstop.
+  const now = new Date();
+  const changed =
+    delta.contacts.length > 0 ||
+    delta.removedIds.length > 0 ||
+    summary.proposalsApplied > 0;
+
+  const decision = duplicateScanDecision(
+    changed,
+    await getSyncState(env, "last_duplicate_scan"),
+    now,
+  );
+  summary.duplicateScan = decision;
+  if (decision !== "skipped") {
+    summary.proposalsOpened += await detectDuplicates(env);
+    await setSyncState(env, "last_duplicate_scan", now.toISOString());
+  }
 
   if (delta.deltaLink) {
     await setSyncState(env, "graph_delta_link", delta.deltaLink);
@@ -83,7 +106,7 @@ export async function runSync(env: Env): Promise<SyncSummary> {
   await setSyncState(
     env,
     "last_sync",
-    JSON.stringify({ at: new Date().toISOString(), ...summary }),
+    JSON.stringify({ at: now.toISOString(), ...summary }),
   );
   return summary;
 }

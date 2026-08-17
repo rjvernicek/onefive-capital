@@ -66,6 +66,21 @@ the next run.
 the last run, so the half-hourly cron costs almost nothing. Outlook deletions
 tombstone the local row instead of deleting it — the notes survive.
 
+Duplicate detection is gated separately, because unlike the rest of the sync
+it scales with the size of the rolodex rather than with what changed: it
+`GROUP BY`s the whole contacts and emails tables. Running that 48 times a day
+over unchanged data is the one part of this design that would eventually press
+on D1's free-tier read quota (somewhere north of ~25,000 contacts). So it runs
+only when the contact set actually moved — Outlook reported additions or
+removals, or a queued push was applied — with a **daily backstop** so a
+duplicate that arrives some other way still surfaces within a day. On a quiet
+day that is 1 scan instead of 48. `sync_status` reports which happened
+(`changed`, `interval`, or `skipped`).
+
+The applied-push signal is what keeps SMS-created contacts prompt: adding
+someone by text always enqueues a `push_create`, so the next run sees a change
+and scans, rather than waiting on the backstop.
+
 **The SMS loop is client-side tools.** Unlike `healthspan-sms` (which points
 Claude at an external MCP server), the data here lives in this Worker's D1
 binding, so the Worker defines nine tools (search, contact card, company
@@ -296,6 +311,7 @@ Deliberately not built yet, in rough order of likely value:
 | `src/graph.ts` | Microsoft Graph: OAuth, token rotation, delta reads, writes |
 | `src/db.ts` | D1 data layer: search, cards, writes, proposals |
 | `src/clean.ts` | Normalization rules (pure, tested) |
+| `src/schedule.ts` | Duplicate-scan gating policy (pure, tested) |
 | `src/tools.ts` | Claude tool definitions + executor over the data layer |
 | `src/claude.ts` | Claude call with client-side tool loop |
 | `src/prompt.ts` | System prompt — rolodex conventions and SMS style |

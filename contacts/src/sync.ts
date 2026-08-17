@@ -1,6 +1,7 @@
 import type { Env } from "./env.js";
 import {
   pullContactsDelta,
+  parseCursor,
   patchContact,
   createOutlookContact,
   deleteOutlookContact,
@@ -8,10 +9,6 @@ import {
   type GraphContact,
 } from "./graph.js";
 import {
-  createContact,
-  updateContactFields,
-  replaceEmails,
-  replacePhones,
   reindexContact,
   createProposal,
   listProposals,
@@ -19,6 +16,14 @@ import {
   getSyncState,
   setSyncState,
   getContactCard,
+  ensureCompany,
+  emailStatements,
+  phoneStatements,
+  searchStatements,
+  buildSearchBlob,
+  recentNoteBodies,
+  parseTags,
+  type CompanyCache,
 } from "./db.js";
 import { normalizePhone, normalizeNameCase, normalizeEmail } from "./clean.js";
 import { duplicateScanDecision, type ScanDecision } from "./schedule.js";
@@ -31,6 +36,8 @@ export interface SyncSummary {
   proposalsApplied: number;
   /** Whether this run ran the duplicate scan, and why. */
   duplicateScan: ScanDecision;
+  /** False while a large initial crawl is still paging in across runs. */
+  crawlComplete: boolean;
   errors: string[];
 }
 
@@ -49,18 +56,26 @@ export async function runSync(env: Env): Promise<SyncSummary> {
     proposalsOpened: 0,
     proposalsApplied: 0,
     duplicateScan: "skipped",
+    crawlComplete: true,
     errors: [],
   };
   if (!summary.connected) return summary;
 
   summary.proposalsApplied = await pushApproved(env, summary.errors);
 
-  const deltaLink = await getSyncState(env, "graph_delta_link");
-  const delta = await pullContactsDelta(env, deltaLink);
+  const delta = await pullContactsDelta(
+    env,
+    parseCursor(await getSyncState(env, "graph_delta_link")),
+  );
+  summary.crawlComplete = delta.complete;
+
+  // One memo for the whole run: a few thousand contacts map to far fewer
+  // firms, so most company lookups after the first few hundred cost nothing.
+  const companies: CompanyCache = new Map();
 
   for (const contact of delta.contacts) {
     try {
-      const opened = await upsertFromGraph(env, contact);
+      const opened = await upsertFromGraph(env, contact, companies);
       summary.pulled++;
       summary.proposalsOpened += opened;
     } catch (error) {
@@ -89,19 +104,26 @@ export async function runSync(env: Env): Promise<SyncSummary> {
     delta.removedIds.length > 0 ||
     summary.proposalsApplied > 0;
 
-  const decision = duplicateScanDecision(
-    changed,
-    await getSyncState(env, "last_duplicate_scan"),
-    now,
-  );
+  // Never scan mid-crawl. Half the rolodex is imported, so a contact's
+  // duplicate may simply not exist yet — the scan would miss real pairs and
+  // burn a full table scan to do it. Defer until the crawl completes.
+  const decision = delta.complete
+    ? duplicateScanDecision(
+        changed,
+        await getSyncState(env, "last_duplicate_scan"),
+        now,
+      )
+    : "skipped";
   summary.duplicateScan = decision;
   if (decision !== "skipped") {
     summary.proposalsOpened += await detectDuplicates(env);
     await setSyncState(env, "last_duplicate_scan", now.toISOString());
   }
 
-  if (delta.deltaLink) {
-    await setSyncState(env, "graph_delta_link", delta.deltaLink);
+  // Persisting a `next` cursor is what lets a large initial crawl resume on
+  // the following run instead of restarting from the first page forever.
+  if (delta.cursor) {
+    await setSyncState(env, "graph_delta_link", JSON.stringify(delta.cursor));
   }
   await setSyncState(
     env,
@@ -129,6 +151,7 @@ function message(error: unknown): string {
 async function upsertFromGraph(
   env: Env,
   graphContact: GraphContact,
+  companies: CompanyCache,
 ): Promise<number> {
   const rawName =
     graphContact.displayName ||
@@ -158,32 +181,96 @@ async function upsertFromGraph(
     country: graphContact.businessAddress?.countryOrRegion ?? undefined,
   };
 
+  const companyId = fields.company
+    ? await ensureCompany(env, fields.company, companies)
+    : null;
+  const phoneValues = phones.map((p) => p.value);
+
   const existing = await env.DB.prepare(
-    `SELECT id FROM contacts WHERE graph_id = ?`,
+    `SELECT id, tags FROM contacts WHERE graph_id = ?`,
   )
     .bind(graphContact.id)
-    .first<{ id: number }>();
+    .first<{ id: number; tags: string }>();
 
+  // The write is deliberately two round trips regardless of contact count: one
+  // to land the contact row and learn its id, then a single batch for every
+  // child row and the search entry. The obvious shape — a query per email, per
+  // phone, then a card re-read to rebuild the index — is about eleven round
+  // trips, which across a few thousand contacts is the difference between a
+  // crawl that finishes in one invocation and one that does not.
   let contactId: number;
+  let tags: string[] = [];
+  let notes: string[] = [];
+
   if (existing) {
     contactId = existing.id;
-    await updateContactFields(env, contactId, fields);
+    tags = parseTags(existing.tags);
+    // Only an existing contact can carry notes, and they belong in the search
+    // blob. New contacts skip this read entirely — which is every contact
+    // during the initial crawl.
+    notes = await recentNoteBodies(env, contactId);
+
     await env.DB.prepare(
-      `UPDATE contacts SET deleted = 0, synced_at = datetime('now') WHERE id = ?`,
+      `UPDATE contacts
+          SET display_name = ?, given_name = ?, family_name = ?, company_id = ?,
+              job_title = ?, city = ?, state = ?, country = ?,
+              deleted = 0, synced_at = datetime('now'), updated_at = datetime('now')
+        WHERE id = ?`,
     )
-      .bind(contactId)
+      .bind(
+        fields.display_name,
+        fields.given_name ?? null,
+        fields.family_name ?? null,
+        companyId,
+        fields.job_title ?? null,
+        fields.city ?? null,
+        fields.state ?? null,
+        fields.country ?? null,
+        contactId,
+      )
       .run();
-    await replaceEmails(env, contactId, emails);
-    await replacePhones(env, contactId, phones.map((p) => p.value));
-    await reindexContact(env, contactId);
   } else {
-    contactId = await createContact(
-      env,
-      { ...fields, source: "outlook", graph_id: graphContact.id },
-      emails,
-      phones.map((p) => p.value),
-    );
+    const inserted = await env.DB.prepare(
+      `INSERT INTO contacts
+         (graph_id, display_name, given_name, family_name, company_id, job_title,
+          city, state, country, source, tags, synced_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'outlook', '[]', datetime('now'))
+       RETURNING id`,
+    )
+      .bind(
+        graphContact.id,
+        fields.display_name,
+        fields.given_name ?? null,
+        fields.family_name ?? null,
+        companyId,
+        fields.job_title ?? null,
+        fields.city ?? null,
+        fields.state ?? null,
+        fields.country ?? null,
+      )
+      .first<{ id: number }>();
+    contactId = inserted!.id;
   }
+
+  const blob = buildSearchBlob({
+    displayName: fields.display_name,
+    givenName: fields.given_name,
+    familyName: fields.family_name,
+    jobTitle: fields.job_title,
+    companyName: fields.company,
+    city: fields.city,
+    state: fields.state,
+    emails: emails.map((e) => e.trim().toLowerCase()),
+    phones: phoneValues,
+    tags,
+    notes,
+  });
+
+  await env.DB.batch([
+    ...emailStatements(env, contactId, emails),
+    ...phoneStatements(env, contactId, phoneValues),
+    ...searchStatements(env, contactId, blob),
+  ]);
 
   return openFormattingProposals(env, contactId, graphContact, {
     displayName,

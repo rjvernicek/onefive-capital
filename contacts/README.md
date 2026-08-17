@@ -62,9 +62,49 @@ the next sync run — including the Outlook write. Your own edits over SMS
 ("Jane moved to Apollo") skip the queue: they enter pre-approved and push on
 the next run.
 
-**Sync is incremental.** Graph delta queries return only what changed since
-the last run, so the half-hourly cron costs almost nothing. Outlook deletions
-tombstone the local row instead of deleting it — the notes survive.
+**Expect a backlog on day one.** A first import of a long-standing rolodex
+surfaces every duplicate it has accumulated at once — on a few thousand
+contacts, typically 50–150 pairs even under this narrow detection. Clearing
+that one id per text isn't a review, it's a chore that gets abandoned
+half-done, so bulk resolution exists:
+
+```
+you  → "cleanups?"
+back ← "138 pending (112 merges, 26 formatting). First 5: ..."
+you  → "approve all the formatting ones"
+back ← "Approved 26 formatting fixes. Applied on the next sync run."
+```
+
+Bulk is owner-initiated only and split by kind on purpose. Formatting fixes
+are the safe half — reformatting a phone number is reversible and low-stakes.
+Merges are not: each one tombstones a record. The assistant will offer bulk
+for formatting, but won't bulk-approve merges without an unmistakable yes, and
+states the count first because it can't be undone.
+
+**Sync is incremental, and the first crawl resumes.** Graph delta queries
+return only what changed since the last run, so the half-hourly cron costs
+almost nothing. Outlook deletions tombstone the local row instead of deleting
+it — the notes survive.
+
+The initial crawl is the one run that isn't small. Two things make it
+survivable on a rolodex of a few thousand: the delta request asks for 100
+contacts per page rather than Graph's default of 10, and a run that hits the
+page cap **persists its `nextLink`** so the following run continues from
+exactly where it stopped. Without that second part a crawl longer than the cap
+restarts from page one every 30 minutes and never converges. `sync_status`
+reports `crawlComplete: false` while it is still paging in.
+
+Each contact costs two round trips to write — one to land the row and learn
+its id, then a single batch for every email, phone, and the search entry.
+Written the obvious way (a query per email, a query per phone, then a card
+re-read to rebuild the index) it is about eleven, which across a few thousand
+contacts is the difference between a crawl that fits in one invocation and one
+that doesn't. Company lookups are memoized per run, since a few thousand
+contacts resolve to far fewer firms.
+
+Duplicate detection is deferred while `crawlComplete` is false: half the
+rolodex is imported, so a contact's duplicate may not exist yet, and scanning
+early would miss real pairs while paying for a full table scan.
 
 Duplicate detection is gated separately, because unlike the rest of the sync
 it scales with the size of the rolodex rather than with what changed: it
@@ -177,7 +217,8 @@ Text the number. `npm run tail` streams live logs if something looks wrong.
   "Jane moved to Apollo, now a principal", "tag Ellis as lp"
 - **Add someone** — "add Tom Reed, tom@reedcap.com, 214-555-0100, runs Reed
   Capital" (created in Outlook on the next sync)
-- **Hygiene** — "cleanups?", then "approve 4" / "reject 7"
+- **Hygiene** — "cleanups?", then "approve 4" / "reject 7", or in bulk:
+  "approve all the formatting ones" / "reject everything"
 - **Status** — "when did the last sync run?"
 - **Cost** — "pricing" runs the spend review on demand; "what am I spending?"
   answers conversationally

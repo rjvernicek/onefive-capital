@@ -11,6 +11,8 @@ import {
   reindexContact,
   addNote,
   listProposals,
+  countProposals,
+  resolveAllProposals,
   getProposal,
   setProposalStatus,
   getSyncState,
@@ -164,6 +166,23 @@ export const toolDefinitions: Anthropic.Tool[] = [
     },
   },
   {
+    name: "resolve_all_cleanups",
+    description:
+      "Approve or reject EVERY pending cleanup at once, optionally limited to one kind ('merge_duplicates' or 'fix_formatting'). Only for when the owner explicitly asks to bulk approve or reject — never use this on your own initiative, and never as a shortcut for reviewing merges. Returns how many were moved.",
+    input_schema: {
+      type: "object",
+      properties: {
+        decision: { type: "string", enum: ["approve", "reject"] },
+        kind: {
+          type: "string",
+          enum: ["merge_duplicates", "fix_formatting"],
+          description: "Omit to apply to every pending cleanup",
+        },
+      },
+      required: ["decision"],
+    },
+  },
+  {
     name: "sync_status",
     description:
       "When the last Outlook sync ran and what it did. Use when asked whether the database is up to date.",
@@ -297,8 +316,17 @@ export async function runTool(
     }
 
     case "list_cleanups": {
-      const pending = await listProposals(env, "pending", clampLimit(input.limit, 10));
+      const limit = clampLimit(input.limit, 10);
+      const [pending, total, merges] = await Promise.all([
+        listProposals(env, "pending", limit),
+        countProposals(env, "pending"),
+        countProposals(env, "pending", "merge_duplicates"),
+      ]);
       return JSON.stringify({
+        total_pending: total,
+        pending_merges: merges,
+        pending_formatting: total - merges,
+        showing: pending.length,
         pending: pending.map((p) => ({ id: p.id, kind: p.kind, summary: p.summary })),
       });
     }
@@ -322,6 +350,33 @@ export async function runTool(
         decision === "approve" ? "approved" : "rejected",
       );
       return JSON.stringify({ ok: true, id, status: decision + "d" });
+    }
+
+    case "resolve_all_cleanups": {
+      const decision = String(input.decision ?? "");
+      if (decision !== "approve" && decision !== "reject") {
+        throw new Error("decision must be approve or reject");
+      }
+      const kind = optString(input.kind);
+      if (kind && kind !== "merge_duplicates" && kind !== "fix_formatting") {
+        throw new Error(
+          "kind must be merge_duplicates or fix_formatting, or omitted",
+        );
+      }
+      const moved = await resolveAllProposals(
+        env,
+        decision === "approve" ? "approved" : "rejected",
+        kind,
+      );
+      return JSON.stringify({
+        ok: true,
+        [decision === "approve" ? "approved" : "rejected"]: moved,
+        kind: kind ?? "all",
+        note:
+          decision === "approve" && moved > 0
+            ? "Applied on the next sync run, within the half hour."
+            : undefined,
+      });
     }
 
     case "sync_status": {

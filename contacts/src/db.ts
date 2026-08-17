@@ -165,7 +165,7 @@ export async function getContactCard(
   };
 }
 
-function parseTags(raw: string): string[] {
+export function parseTags(raw: string): string[] {
   try {
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed.map(String) : [];
@@ -232,29 +232,45 @@ export async function getCompanyCard(
   return { ...company, people: people.results, notes: notes.results };
 }
 
+/**
+ * Per-run memo of company key -> id. A few thousand contacts resolve to far
+ * fewer distinct firms, so during the initial crawl this turns most company
+ * lookups into no round trip at all.
+ */
+export type CompanyCache = Map<string, number | null>;
+
 /** Find-or-create a company row by its normalized key. */
 export async function ensureCompany(
   env: Env,
   name: string,
+  cache?: CompanyCache,
 ): Promise<number | null> {
   const trimmed = name.trim();
   if (!trimmed) return null;
   const key = normalizeCompanyKey(trimmed);
   if (!key) return null;
 
+  const memo = cache?.get(key);
+  if (memo !== undefined) return memo;
+
   const existing = await env.DB.prepare(
     `SELECT id FROM companies WHERE normalized_name = ?`,
   )
     .bind(key)
     .first<{ id: number }>();
-  if (existing) return existing.id;
+  if (existing) {
+    cache?.set(key, existing.id);
+    return existing.id;
+  }
 
   const inserted = await env.DB.prepare(
     `INSERT INTO companies (name, normalized_name) VALUES (?, ?) RETURNING id`,
   )
     .bind(trimmed, key)
     .first<{ id: number }>();
-  return inserted?.id ?? null;
+  const id = inserted?.id ?? null;
+  cache?.set(key, id);
+  return id;
 }
 
 // ---------------------------------------------------------------------------
@@ -353,23 +369,81 @@ export async function updateContactFields(
   await reindexContact(env, id);
 }
 
+/**
+ * Statement builders for the rows that hang off a contact.
+ *
+ * These return statements rather than executing them so a caller can commit
+ * emails, phones, and the search row in a single D1 batch. The initial Outlook
+ * crawl writes thousands of contacts, and one round trip per row is the
+ * difference between a crawl that finishes inside one invocation and one that
+ * does not.
+ */
+export function emailStatements(
+  env: Env,
+  contactId: number,
+  emails: string[],
+): D1PreparedStatement[] {
+  const unique = [...new Set(emails.map(normalizeEmail).filter(Boolean))];
+  return [
+    env.DB.prepare(`DELETE FROM contact_emails WHERE contact_id = ?`).bind(
+      contactId,
+    ),
+    ...unique.map((email, i) =>
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO contact_emails (contact_id, email, is_primary)
+         VALUES (?, ?, ?)`,
+      ).bind(contactId, email, i === 0 ? 1 : 0),
+    ),
+  ];
+}
+
+export function phoneStatements(
+  env: Env,
+  contactId: number,
+  phones: string[],
+): D1PreparedStatement[] {
+  const unique = [...new Set(phones.map((p) => p.trim()).filter(Boolean))];
+  return [
+    env.DB.prepare(`DELETE FROM contact_phones WHERE contact_id = ?`).bind(
+      contactId,
+    ),
+    ...unique.map((phone, i) =>
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO contact_phones (contact_id, phone, is_primary)
+         VALUES (?, ?, ?)`,
+      ).bind(contactId, phone, i === 0 ? 1 : 0),
+    ),
+  ];
+}
+
+export function searchStatements(
+  env: Env,
+  contactId: number,
+  blob: string | null,
+): D1PreparedStatement[] {
+  const statements = [
+    env.DB.prepare(`DELETE FROM contact_search WHERE contact_id = ?`).bind(
+      contactId,
+    ),
+  ];
+  // A null blob means the contact is gone or tombstoned: drop it from the
+  // index and write nothing back.
+  if (blob !== null) {
+    statements.push(
+      env.DB.prepare(
+        `INSERT INTO contact_search (blob, contact_id) VALUES (?, ?)`,
+      ).bind(blob, contactId),
+    );
+  }
+  return statements;
+}
+
 export async function replaceEmails(
   env: Env,
   contactId: number,
   emails: string[],
 ): Promise<void> {
-  await env.DB.prepare(`DELETE FROM contact_emails WHERE contact_id = ?`)
-    .bind(contactId)
-    .run();
-  const unique = [...new Set(emails.map(normalizeEmail).filter(Boolean))];
-  for (let i = 0; i < unique.length; i++) {
-    await env.DB.prepare(
-      `INSERT OR IGNORE INTO contact_emails (contact_id, email, is_primary)
-       VALUES (?, ?, ?)`,
-    )
-      .bind(contactId, unique[i], i === 0 ? 1 : 0)
-      .run();
-  }
+  await env.DB.batch(emailStatements(env, contactId, emails));
 }
 
 export async function replacePhones(
@@ -377,18 +451,7 @@ export async function replacePhones(
   contactId: number,
   phones: string[],
 ): Promise<void> {
-  await env.DB.prepare(`DELETE FROM contact_phones WHERE contact_id = ?`)
-    .bind(contactId)
-    .run();
-  const unique = [...new Set(phones.map((p) => p.trim()).filter(Boolean))];
-  for (let i = 0; i < unique.length; i++) {
-    await env.DB.prepare(
-      `INSERT OR IGNORE INTO contact_phones (contact_id, phone, is_primary)
-       VALUES (?, ?, ?)`,
-    )
-      .bind(contactId, unique[i], i === 0 ? 1 : 0)
-      .run();
-  }
+  await env.DB.batch(phoneStatements(env, contactId, phones));
 }
 
 export async function addNote(
@@ -421,39 +484,87 @@ export async function addNote(
 // ---------------------------------------------------------------------------
 // Search index maintenance
 
-/**
- * Rebuild the one search row for a contact. The blob flattens everything a
- * lookup might reasonably key on: name, title, company, emails, phones, tags,
- * and recent note text.
- */
-export async function reindexContact(env: Env, id: number): Promise<void> {
-  const card = await getContactCard(env, id);
-  await env.DB.prepare(`DELETE FROM contact_search WHERE contact_id = ?`)
-    .bind(id)
-    .run();
-  if (!card) return; // deleted/tombstoned: leave it out of the index
+export interface SearchBlobInput {
+  displayName: string;
+  givenName?: string | null;
+  familyName?: string | null;
+  jobTitle?: string | null;
+  companyName?: string | null;
+  city?: string | null;
+  state?: string | null;
+  emails: string[];
+  phones: string[];
+  tags: string[];
+  notes: string[];
+}
 
-  const blob = [
-    card.display_name,
-    card.given_name,
-    card.family_name,
-    card.job_title,
-    card.company?.name,
-    card.city,
-    card.state,
-    ...card.emails.map((e) => e.email),
-    ...card.phones.map((p) => p.phone),
-    ...card.tags,
-    ...card.notes.map((n) => n.body),
+/**
+ * Flatten everything a lookup might reasonably key on into one indexable
+ * string: name, title, company, location, emails, phones, tags, and recent
+ * note text.
+ *
+ * Shared by both writers so the blob the sync path builds inline and the one
+ * reindexContact rebuilds from a card can't drift apart — a difference between
+ * them would show up as contacts that are findable only until the next sync
+ * touches them.
+ */
+export function buildSearchBlob(input: SearchBlobInput): string {
+  return [
+    input.displayName,
+    input.givenName,
+    input.familyName,
+    input.jobTitle,
+    input.companyName,
+    input.city,
+    input.state,
+    ...input.emails,
+    ...input.phones,
+    ...input.tags,
+    ...input.notes,
   ]
     .filter(Boolean)
     .join(" ");
+}
 
-  await env.DB.prepare(
-    `INSERT INTO contact_search (blob, contact_id) VALUES (?, ?)`,
+/** Note bodies that belong in the search blob, without loading a whole card. */
+export async function recentNoteBodies(
+  env: Env,
+  contactId: number,
+  limit = 8,
+): Promise<string[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT body FROM notes WHERE contact_id = ? ORDER BY occurred_at DESC LIMIT ?`,
   )
-    .bind(blob, id)
-    .run();
+    .bind(contactId, limit)
+    .all<{ body: string }>();
+  return results.map((r) => r.body);
+}
+
+/**
+ * Rebuild the one search row for a contact by re-reading its card. Callers
+ * that already hold the contact's data should build the blob with
+ * buildSearchBlob and batch searchStatements instead — this path costs a full
+ * card read.
+ */
+export async function reindexContact(env: Env, id: number): Promise<void> {
+  const card = await getContactCard(env, id);
+  const blob = card
+    ? buildSearchBlob({
+        displayName: card.display_name,
+        givenName: card.given_name,
+        familyName: card.family_name,
+        jobTitle: card.job_title,
+        companyName: card.company?.name,
+        city: card.city,
+        state: card.state,
+        emails: card.emails.map((e) => e.email),
+        phones: card.phones.map((p) => p.phone),
+        tags: card.tags,
+        notes: card.notes.map((n) => n.body),
+      })
+    : null; // deleted/tombstoned: leave it out of the index
+
+  await env.DB.batch(searchStatements(env, id, blob));
 }
 
 // ---------------------------------------------------------------------------
@@ -522,6 +633,55 @@ export async function getProposal(
   )
     .bind(id)
     .first<Proposal>();
+}
+
+export async function countProposals(
+  env: Env,
+  status: string,
+  kind?: string,
+): Promise<number> {
+  const row = kind
+    ? await env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM proposals WHERE status = ? AND kind = ?`,
+      )
+        .bind(status, kind)
+        .first<{ n: number }>()
+    : await env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM proposals WHERE status = ?`,
+      )
+        .bind(status)
+        .first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+/**
+ * Resolve every pending proposal at once, optionally limited to one kind.
+ *
+ * Exists for the migration case: a first crawl of a long-lived rolodex can
+ * surface a hundred or more duplicates, and clearing that backlog one id per
+ * text is not a review, it is a chore that gets abandoned half-done. Approving
+ * in bulk is the owner's call to make explicitly — nothing calls this on its
+ * own initiative.
+ *
+ * Returns the number of proposals moved.
+ */
+export async function resolveAllProposals(
+  env: Env,
+  status: "approved" | "rejected",
+  kind?: string,
+): Promise<number> {
+  const statement = kind
+    ? env.DB.prepare(
+        `UPDATE proposals SET status = ?, resolved_at = datetime('now')
+          WHERE status = 'pending' AND kind = ?`,
+      ).bind(status, kind)
+    : env.DB.prepare(
+        `UPDATE proposals SET status = ?, resolved_at = datetime('now')
+          WHERE status = 'pending'`,
+      ).bind(status);
+
+  const result = await statement.run();
+  return result.meta.changes ?? 0;
 }
 
 export async function setProposalStatus(

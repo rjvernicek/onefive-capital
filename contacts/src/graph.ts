@@ -153,34 +153,57 @@ async function accessToken(env: Env): Promise<string> {
 // ---------------------------------------------------------------------------
 // Reads
 
+/**
+ * Where the next pull resumes from.
+ *
+ * `delta` means the crawl finished and the URL returns only what changes from
+ * here. `next` means a run stopped mid-crawl at the page cap and the URL is
+ * the next page — persisting it is what lets a large initial crawl finish
+ * across several runs instead of restarting from page one forever.
+ */
+export type DeltaCursor =
+  | { type: "delta"; url: string }
+  | { type: "next"; url: string };
+
 export interface DeltaResult {
   contacts: GraphContact[];
   removedIds: string[];
-  deltaLink: string;
+  /** Persist this and hand it back on the next call. */
+  cursor: DeltaCursor | null;
+  /** False when the page cap stopped the crawl before it reached the end. */
+  complete: boolean;
 }
 
 /**
- * Pull everything that changed since the last sync. `previousDeltaLink` of
- * null means a full initial crawl. Follows nextLink pages to exhaustion and
- * returns the deltaLink to persist for the next run.
+ * Graph's default page size for contacts is small (10), which would turn a
+ * few thousand contacts into hundreds of round trips. Ask for the maximum.
+ */
+const PAGE_SIZE = 100;
+
+/**
+ * Bounded so one invocation can't run away. At PAGE_SIZE that is 5,000
+ * contacts per run; beyond it the run returns a `next` cursor and the
+ * following run picks up exactly where this one stopped.
+ */
+const MAX_PAGES = 50;
+
+/**
+ * Pull everything that changed since the last sync. A `previous` of null
+ * means a full initial crawl.
  */
 export async function pullContactsDelta(
   env: Env,
-  previousDeltaLink: string | null,
+  previous: DeltaCursor | null,
 ): Promise<DeltaResult> {
   const token = await accessToken(env);
   let url =
-    previousDeltaLink ??
-    `${GRAPH}/me/contacts/delta?$select=${SELECT_FIELDS}`;
+    previous?.url ??
+    `${GRAPH}/me/contacts/delta?$select=${SELECT_FIELDS}&$top=${PAGE_SIZE}`;
 
   const contacts: GraphContact[] = [];
   const removedIds: string[] = [];
-  let deltaLink = "";
 
-  // Bounded to keep a pathological account from running the Worker into its
-  // CPU limit; 50 pages at Graph's default page size covers thousands of
-  // changes, and anything left is picked up next run via the same nextLink.
-  for (let page = 0; page < 50; page++) {
+  for (let page = 0; page < MAX_PAGES; page++) {
     const response = await fetch(url, {
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -200,15 +223,55 @@ export async function pullContactsDelta(
       else contacts.push(item);
     }
 
+    // A deltaLink ends the crawl: everything is imported and this URL returns
+    // changes from here on.
     if (body["@odata.deltaLink"]) {
-      deltaLink = body["@odata.deltaLink"];
-      break;
+      return {
+        contacts,
+        removedIds,
+        cursor: { type: "delta", url: body["@odata.deltaLink"] },
+        complete: true,
+      };
     }
-    if (!body["@odata.nextLink"]) break;
+
+    // No nextLink and no deltaLink shouldn't happen, but if Graph ends a page
+    // sequence without handing back a resume point there is nothing to store;
+    // keeping the previous cursor would re-read pages we just consumed.
+    if (!body["@odata.nextLink"]) {
+      console.warn("Graph ended pagination without a deltaLink");
+      return { contacts, removedIds, cursor: null, complete: true };
+    }
+
     url = body["@odata.nextLink"];
   }
 
-  return { contacts, removedIds, deltaLink };
+  // Hit the page cap. `url` is the page we did not fetch, so storing it makes
+  // the next run resume rather than start over.
+  console.info(`Delta paused at page cap; resuming next run (${contacts.length} so far)`);
+  return { contacts, removedIds, cursor: { type: "next", url }, complete: false };
+}
+
+/**
+ * Read a stored cursor. Tolerates the bare URL string an older deploy may
+ * have written, treating it as a delta link.
+ */
+export function parseCursor(raw: string | null): DeltaCursor | null {
+  if (!raw) return null;
+  if (raw.startsWith("http")) return { type: "delta", url: raw };
+  try {
+    const parsed = JSON.parse(raw) as DeltaCursor;
+    if (
+      (parsed?.type === "delta" || parsed?.type === "next") &&
+      typeof parsed.url === "string"
+    ) {
+      return parsed;
+    }
+  } catch {
+    // fall through — a corrupt cursor restarts the crawl, which is correct
+    // but expensive, so say so.
+  }
+  console.warn("Unreadable delta cursor; restarting the crawl");
+  return null;
 }
 
 // ---------------------------------------------------------------------------

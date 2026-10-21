@@ -13,11 +13,11 @@ def tee(x,label,art,back):
  {art}
  <text x="300" y="700" text-anchor="middle" font-family="sans-serif" font-size="22" fill="#555">{label}</text></g>'''
 # front: 12in sign -> 240px wide on 600px tee (approx 20px/in)
-fa=f'<g transform="translate(180,170) scale(0.2)">{front}</g>'
+fa=f'<g transform="translate(190,165) scale(0.2)">{front}</g>'
 ya=f'<g transform="translate(260,72) scale(0.2)">{yoke}</g>'
 svg=f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 740" width="1240" height="740">
 <rect width="1240" height="740" fill="#ffffff"/>
-{tee(10,"FRONT — OneFive St blade, 12in wide, centred chest",fa,False)}
+{tee(10,"FRONT — 15TH ST blade, 11in wide, centred chest",fa,False)}
 {tee(630,"BACK — OneFive wordmark, centre yoke",ya,True)}
 </svg>'''
 open(f"{d}/mockup.svg","w").write(svg)

@@ -4,10 +4,10 @@
 
 | File | Placement | Size | Ink |
 |---|---|---|---|
-| `front-street-sign.svg` | Front, centred chest, ~3.5in below collar | 12in × 3.6in | Green `#00704A` (PMS 3415 C), white |
+| `front-street-sign.svg` | Front, centred chest, ~3.5in below collar | 11in × 4in | Green `#00704A` (PMS 3415 C), white |
 | `back-yoke-onefive.svg` | Back, centre yoke, ~1in below collar seam | 4in × 0.8in | Green `#00704A` |
 
-The front is a Philadelphia six-sided green street blade reading **OneFive St**, with the "1500 / S" block number on the left end (15 = OneFive). The white keyline and text knock out of the green, so on a white or natural tee the white can be left as shirt colour (one-colour print) or printed as white underbase.
+The front recreates a Philadelphia street blade: a green rounded rectangle with a white border, the Liberty Bell mark, the block-number band (`← 1500 S 1600 →`) and **15TH ST** with the raised "TH". 15th Street = OneFive. Everything white knocks out of the green, so on a white or natural tee it can print as one colour.
 
 All text is converted to outlines — no fonts needed to print. Shown on a natural tee.
 

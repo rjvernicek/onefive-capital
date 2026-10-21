@@ -85,12 +85,15 @@ def blade(W, H, name, kind, block_l, dirn, block_r):
     baseline = H * 0.91
     parts.append(liberty_bell(W * 0.018, baseline - 109 * bw / 100, bw))
     # street-type suffix, right-aligned
-    ks = H * 0.235 / bc
-    d, wk = text_path(kind, "b", ks, W * 0.975, baseline, "end", tracking=0.04)
-    parts.append(f'<path d="{d}" fill="{WHITE}"/>')
+    right = W * 0.975
+    if kind:
+        ks = H * 0.235 / bc
+        d, wk = text_path(kind, "b", ks, right, baseline, "end", tracking=0.04)
+        parts.append(f'<path d="{d}" fill="{WHITE}"/>')
+        right -= wk + W * 0.035
     # street name, as large as fits between bell and suffix
-    left, right = W * 0.018 + bw + W * 0.02, W * 0.975 - wk - W * 0.035
-    ns = H * 0.52 / bc
+    left = W * 0.018 + bw + W * 0.02
+    ns = H * 0.46 / bc
     _, tw = text_path(name, "b", ns, 0, 0)
     ns = min(ns, ns * (right - left) / tw)
     d, _ = text_path(name, "b", ns, (left + right) / 2, baseline, "middle")
@@ -106,6 +109,8 @@ def svg(w, h, body, bg=None):
 FW, FH = 1100, 311
 front = blade(FW, FH, "ONEFIVE", "ST", "1400", "N", "1500")
 open(f"{OUT}/front-street-sign.svg", "w").write(svg(FW, FH, front))
+front = blade(FW, FH, "ONEFIVE", "", "1400", "N", "1500")
+open(f"{OUT}/front-street-sign-no-st.svg", "w").write(svg(FW, FH, front))
 
 # ---- BACK YOKE: 3.5in wide wordmark, centred below collar ----
 YW, YH = 400, 80

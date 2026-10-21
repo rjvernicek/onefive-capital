@@ -6,7 +6,8 @@ from fontTools.pens.boundsPen import BoundsPen
 
 FD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
 OUT = sys.argv[1]
-GREEN = "#00704A"   # Philly street-blade green
+GREEN = "#41715C"   # street-blade green, sampled from the reference sign
+GOLD = "#E3B23C"
 WHITE = "#FFFFFF"
 
 fonts = {k: TTFont(os.path.join(FD, f)) for k, f in
@@ -30,65 +31,70 @@ def text_path(s, font, size, x, y, anchor="start", tracking=0):
         cx += hmtx[n][0] * sc + tracking * size
     return pen.getCommands(), width
 
-def arrow(x, y, length, size, direction):
-    """Long-shaft arrow as on the city's block-number band; y is the centre line."""
-    t, hl = size * 0.09, size * 0.42
-    s = 1 if direction > 0 else -1
-    tip = x + s * length
-    base = tip - s * hl
-    return (f'<path d="M{x},{y-t/2} L{base},{y-t/2} L{base},{y-hl*0.55} L{tip},{y} '
-            f'L{base},{y+hl*0.55} L{base},{y+t/2} L{x},{y+t/2} Z" fill="{WHITE}"/>')
+def cap_height(font, size):
+    f = fonts[font]
+    pen = BoundsPen(f.getGlyphSet())
+    f.getGlyphSet()["H"].draw(pen)
+    return pen.bounds[3] / f["head"].unitsPerEm * size
 
-def liberty_bell(cx, cy, size):
-    """Liberty Bell mark, drawn in a 100-unit box centred on (cx, cy)."""
-    k = size / 100
-    tf = f'transform="translate({cx-50*k:.2f},{cy-50*k:.2f}) scale({k:.4f})"'
-    return (f'<g {tf}><rect x="41" y="2" width="18" height="9" rx="2" fill="{WHITE}"/>'
-            f'<path d="M32,22 C32,6 68,6 68,22 L70,58 C72,72 84,76 90,82 L10,82 '
-            f'C16,76 28,72 30,58 Z" fill="{WHITE}"/>'
-            f'<rect x="8" y="82" width="84" height="6" rx="2" fill="{WHITE}"/>'
-            f'<circle cx="50" cy="95" r="5" fill="{WHITE}"/>'
-            f'<path d="M55,26 L51,40 L57,52 L52,66 L56,82" fill="none" stroke="{GREEN}" '
+def arrow(cx, cy, length, size, direction):
+    """Short block-band arrow; (cx, cy) is its centre."""
+    t, hl = size * 0.14, size * 0.5
+    s = 1 if direction > 0 else -1
+    tail, tip = cx - s * length / 2, cx + s * length / 2
+    base = tip - s * hl
+    return (f'<path d="M{tail:.2f},{cy-t/2:.2f} L{base:.2f},{cy-t/2:.2f} L{base:.2f},{cy-hl*0.62:.2f} '
+            f'L{tip:.2f},{cy:.2f} L{base:.2f},{cy+hl*0.62:.2f} L{base:.2f},{cy+t/2:.2f} '
+            f'L{tail:.2f},{cy+t/2:.2f} Z" fill="{WHITE}"/>')
+
+def liberty_bell(x, y, w):
+    """Gold Liberty Bell hung from its yoke, drawn in a 100x110 box at (x, y)."""
+    k = w / 100
+    return (f'<g transform="translate({x:.2f},{y:.2f}) scale({k:.4f})" fill="{GOLD}">'
+            f'<path d="M4,10 C8,2 14,4 18,8 L82,8 C86,4 92,2 96,10 C92,12 90,18 86,20 '
+            f'L14,20 C10,18 8,12 4,10 Z"/>'
+            f'<rect x="43" y="20" width="14" height="10" rx="2"/>'
+            f'<path d="M24,46 C24,26 76,26 76,46 L78,76 C80,90 90,95 98,102 L2,102 '
+            f'C10,95 20,90 22,76 Z"/>'
+            f'<rect x="0" y="101" width="100" height="8" rx="3"/>'
+            f'<path d="M54,40 L49,56 L56,70 L50,86 L54,102" fill="none" stroke="{GREEN}" '
             f'stroke-width="3.5" stroke-linejoin="bevel"/></g>')
 
-def blade(x, y, w, h, num, suffix, kind, block_l, dirn, block_r):
-    r, inset = h * 0.07, h * 0.04
-    sw = h * 0.022
-    parts = [f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{r:.2f}" fill="{GREEN}"/>',
-             f'<rect x="{x+inset:.2f}" y="{y+inset:.2f}" width="{w-2*inset:.2f}" height="{h-2*inset:.2f}" '
-             f'rx="{r-inset*0.6:.2f}" fill="none" stroke="{WHITE}" stroke-width="{sw:.2f}"/>']
-    # Liberty Bell, top-left corner
-    parts.append(liberty_bell(x + h * 0.25, y + h * 0.27, h * 0.27))
-    # block-number band:  <-- 1500  S  1600 -->
-    bs, by = h * 0.15, y + h * 0.3
-    mid = x + w / 2
-    d, wd = text_path(dirn, "b", bs * 1.25, mid, by + bs * 0.45, "middle")
+def blade(W, H, name, kind, block_l, dirn, block_r):
+    # Outline: raised centre tab with chamfered shoulders, flat bottom.
+    sh, cl, cr = H * 0.225, W * 0.235, W * 0.795
+    parts = [f'<path d="M0,{sh:.2f} L{cl:.2f},0 L{cr:.2f},0 L{W},{sh:.2f} L{W},{H} L0,{H} Z" '
+             f'fill="{GREEN}"/>']
+    # block-number band:  <-  1000  E  1100  ->
+    bc, by = cap_height("b", 1), H * 0.155
+    bs = H * 0.17 / bc
+    mid = W * 0.5
+    base = by + H * 0.085
+    d, wd = text_path(dirn, "b", bs, mid, base, "middle")
+    parts.append(f'<path d="{d}" fill="{GOLD}"/>')
+    gap = bs * 0.45
+    d, wl = text_path(block_l, "b", bs, mid - wd / 2 - gap, base, "end")
     parts.append(f'<path d="{d}" fill="{WHITE}"/>')
-    gap = bs * 0.5
-    d, wl = text_path(block_l, "b", bs, mid - wd / 2 - gap, by + bs * 0.36, "end")
+    d, wr = text_path(block_r, "b", bs, mid + wd / 2 + gap, base, "start")
     parts.append(f'<path d="{d}" fill="{WHITE}"/>')
-    d, wr = text_path(block_r, "b", bs, mid + wd / 2 + gap, by + bs * 0.36, "start")
+    alen = H * 0.21
+    parts.append(arrow(mid - wd / 2 - gap - wl - gap - alen / 2, by, alen, H * 0.17, -1))
+    parts.append(arrow(mid + wd / 2 + gap + wr + gap + alen / 2, by, alen, H * 0.17, 1))
+    # Liberty Bell at the left of the name row
+    bw = W * 0.105
+    baseline = H * 0.91
+    parts.append(liberty_bell(W * 0.018, baseline - 109 * bw / 100, bw))
+    # street-type suffix, right-aligned
+    ks = H * 0.235 / bc
+    d, wk = text_path(kind, "b", ks, W * 0.975, baseline, "end", tracking=0.04)
     parts.append(f'<path d="{d}" fill="{WHITE}"/>')
-    alen = h * 0.42
-    lx = mid - wd / 2 - gap - wl - gap * 0.6
-    rx = mid + wd / 2 + gap + wr + gap * 0.6
-    parts.append(arrow(lx, by, alen, bs, -1))
-    parts.append(arrow(rx, by, alen, bs, 1))
-    # street name:  15TH ST  (raised, smaller suffix)
-    ns, base = h * 0.5, y + h * 0.86
-    ss = ns * 0.5
-    _, w1 = text_path(num, "b", ns, 0, 0)
-    _, w2 = text_path(suffix, "b", ss, 0, 0)
-    _, w3 = text_path(kind, "b", ns, 0, 0)
-    sp = ns * 0.3
-    total = w1 + ns * 0.04 + w2 + sp + w3
-    cx = mid - total / 2
-    for txt, size, yy, adv in ((num, ns, base, w1 + ns * 0.04),
-                               (suffix, ss, base - ns * 0.36, w2 + sp),
-                               (kind, ns, base, w3)):
-        d, _ = text_path(txt, "b", size, cx, yy)
-        parts.append(f'<path d="{d}" fill="{WHITE}"/>')
-        cx += adv
+    # street name, as large as fits between bell and suffix
+    left, right = W * 0.018 + bw + W * 0.02, W * 0.975 - wk - W * 0.035
+    ns = H * 0.52 / bc
+    _, tw = text_path(name, "b", ns, 0, 0)
+    ns = min(ns, ns * (right - left) / tw)
+    d, _ = text_path(name, "b", ns, (left + right) / 2, baseline, "middle")
+    parts.append(f'<path d="{d}" fill="{WHITE}"/>')
     return "\n  ".join(parts)
 
 def svg(w, h, body, bg=None):
@@ -96,9 +102,9 @@ def svg(w, h, body, bg=None):
     return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" '
             f'width="{w/100}in" height="{h/100}in">\n  {bgr}{body}\n</svg>\n')
 
-# ---- FRONT: 11in x 4in print (100 units / inch) ----
-FW, FH = 1100, 400
-front = blade(0, 0, FW, FH, "15", "TH", "ST", "1500", "S", "1600")
+# ---- FRONT: 11in x 3.1in print (100 units / inch) ----
+FW, FH = 1100, 311
+front = blade(FW, FH, "ONEFIVE", "ST", "1000", "E", "1100")
 open(f"{OUT}/front-street-sign.svg", "w").write(svg(FW, FH, front))
 
 # ---- BACK YOKE: 3.5in wide wordmark, centred below collar ----

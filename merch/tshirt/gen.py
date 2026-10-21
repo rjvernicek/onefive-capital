@@ -7,7 +7,6 @@ from fontTools.pens.boundsPen import BoundsPen
 FD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
 OUT = sys.argv[1]
 GREEN = "#41715C"   # street-blade green, sampled from the reference sign
-GOLD = "#E3B23C"
 WHITE = "#FFFFFF"
 
 fonts = {k: TTFont(os.path.join(FD, f)) for k, f in
@@ -47,19 +46,6 @@ def arrow(cx, cy, length, size, direction):
             f'L{tip:.2f},{cy:.2f} L{base:.2f},{cy+hl*0.62:.2f} L{base:.2f},{cy+t/2:.2f} '
             f'L{tail:.2f},{cy+t/2:.2f} Z" fill="{WHITE}"/>')
 
-def liberty_bell(x, y, w):
-    """Gold Liberty Bell hung from its yoke, drawn in a 100x110 box at (x, y)."""
-    k = w / 100
-    return (f'<g transform="translate({x:.2f},{y:.2f}) scale({k:.4f})" fill="{GOLD}">'
-            f'<path d="M4,10 C8,2 14,4 18,8 L82,8 C86,4 92,2 96,10 C92,12 90,18 86,20 '
-            f'L14,20 C10,18 8,12 4,10 Z"/>'
-            f'<rect x="43" y="20" width="14" height="10" rx="2"/>'
-            f'<path d="M24,46 C24,26 76,26 76,46 L78,76 C80,90 90,95 98,102 L2,102 '
-            f'C10,95 20,90 22,76 Z"/>'
-            f'<rect x="0" y="101" width="100" height="8" rx="3"/>'
-            f'<path d="M54,40 L49,56 L56,70 L50,86 L54,102" fill="none" stroke="{GREEN}" '
-            f'stroke-width="3.5" stroke-linejoin="bevel"/></g>')
-
 def blade(W, H, name, kind, block_l, dirn, block_r):
     # Outline: raised centre tab with chamfered shoulders, flat bottom.
     sh, cl, cr = H * 0.225, W * 0.235, W * 0.795
@@ -70,8 +56,9 @@ def blade(W, H, name, kind, block_l, dirn, block_r):
     bs = H * 0.17 / bc
     mid = W * 0.5
     base = by + H * 0.085
-    d, wd = text_path(dirn, "b", bs, mid, base, "middle")
-    parts.append(f'<path d="{d}" fill="{GOLD}"/>')
+    # direction letter runs ~1.4x the numbers, centred on them
+    d, wd = text_path(dirn, "b", bs * 1.42, mid, by + H * 0.17 * 1.42 / 2, "middle")
+    parts.append(f'<path d="{d}" fill="{WHITE}"/>')
     gap = bs * 0.45
     d, wl = text_path(block_l, "b", bs, mid - wd / 2 - gap, base, "end")
     parts.append(f'<path d="{d}" fill="{WHITE}"/>')
@@ -80,10 +67,7 @@ def blade(W, H, name, kind, block_l, dirn, block_r):
     alen = H * 0.21
     parts.append(arrow(mid - wd / 2 - gap - wl - gap - alen / 2, by, alen, H * 0.17, -1))
     parts.append(arrow(mid + wd / 2 + gap + wr + gap + alen / 2, by, alen, H * 0.17, 1))
-    # Liberty Bell at the left of the name row
-    bw = W * 0.105
     baseline = H * 0.91
-    parts.append(liberty_bell(W * 0.018, baseline - 109 * bw / 100, bw))
     # street-type suffix, right-aligned
     right = W * 0.975
     if kind:
@@ -91,8 +75,8 @@ def blade(W, H, name, kind, block_l, dirn, block_r):
         d, wk = text_path(kind, "b", ks, right, baseline, "end", tracking=0.04)
         parts.append(f'<path d="{d}" fill="{WHITE}"/>')
         right -= wk + W * 0.035
-    # street name, as large as fits between bell and suffix
-    left = W * 0.018 + bw + W * 0.02
+    # street name, as large as fits before the suffix
+    left = W * 0.025
     ns = H * 0.46 / bc
     _, tw = text_path(name, "b", ns, 0, 0)
     ns = min(ns, ns * (right - left) / tw)

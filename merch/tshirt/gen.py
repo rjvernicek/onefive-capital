@@ -6,7 +6,7 @@ from fontTools.pens.boundsPen import BoundsPen
 
 FD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
 OUT = sys.argv[1]
-GREEN = "#41715C"   # street-blade green, sampled from the reference sign
+GREEN = "#407060"   # street-blade green
 WHITE = "#FFFFFF"
 
 fonts = {k: TTFont(os.path.join(FD, f)) for k, f in

@@ -104,7 +104,7 @@ def svg(w, h, body, bg=None):
 
 # ---- FRONT: 11in x 3.1in print (100 units / inch) ----
 FW, FH = 1100, 311
-front = blade(FW, FH, "ONEFIVE", "ST", "1000", "E", "1100")
+front = blade(FW, FH, "ONEFIVE", "ST", "1400", "N", "1500")
 open(f"{OUT}/front-street-sign.svg", "w").write(svg(FW, FH, front))
 
 # ---- BACK YOKE: 3.5in wide wordmark, centred below collar ----

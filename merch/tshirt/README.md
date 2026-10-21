@@ -7,7 +7,7 @@
 | `front-street-sign.svg` | Front, centred chest, ~3.5in below collar | 11in × 3.1in | Green `#41715C`, white, gold `#E3B23C` |
 | `back-yoke-onefive.svg` | Back, centre yoke, ~1in below collar seam | 4in × 0.8in | Green `#41715C` |
 
-The front recreates the city's newer street sign (the PALMER ST style): a green sign with a raised, angled top, the `← 1000 E 1100 →` block band with a gold E, the gold Liberty Bell, and **ONEFIVE** in place of the street name, with a smaller **ST**. Three-colour print; on a dark tee the green blade frames everything.
+The front recreates the city's newer street sign (the PALMER ST style): a green sign with a raised, angled top, the `← 1400 N 1500 →` block band with a gold N, the gold Liberty Bell, and **ONEFIVE** in place of the street name, with a smaller **ST**. Three-colour print; on a dark tee the green blade frames everything.
 
 All text is converted to outlines — no fonts needed to print. Shown on a natural tee.
 

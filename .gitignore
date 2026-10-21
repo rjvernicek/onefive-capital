@@ -8,3 +8,4 @@ dist/
 .DS_Store
 *.log
 .test-build/
+merch/tshirt/fonts/
